@@ -51,19 +51,42 @@ function init(){
     uniform float iTime;
     uniform vec4 iRands;
 
-    #define numOctaves 3
+    #define numOctaves 5
     
     int randomOctave(in float x)
     {
         return int(floor(x));
     }
+
+    float random(in vec2 x)
+    {
+        return fract(sin(dot(x.xy, vec2(abs(iRands.x) + 1.0,abs(iRands.y) + 1.0))) *44.1334);
+    }
     
     vec2 hash(in vec2 x)
     {
-        vec2 k = vec2(abs(iRands.x) + 1.0,abs(iRands.y) + 1.0);
-        // vec2 k = vec2(4.51985902198,4.4190285909);
+        // vec2 k = vec2(abs(iRands.x) + 1.0,abs(iRands.y) + 1.0);
+        vec2 k = vec2(1.98592,1.123985);
+
         x = x*k + k.yx;
-        return -1.0 + 2.0 * fract(0.125 * k * (x.x*x.y *(x.x + x.y)));
+        return -1.0 + 2.0 * fract(8.0 * k * (x.x*x.y *(x.x + x.y)));
+    }
+
+    float noise(in vec2 x)
+    {
+        vec2 i = floor(x);
+        vec2 f = fract(x);
+
+        float a = random(i);
+        float b = random(i + vec2(1.0,0.0));
+        float c = random(i + vec2(0.0,1.0));
+        float d = random(i + vec2(1.0,1.0));
+
+        vec2 u = f * f * (3.0-2.0 * f);
+
+        float n = mix(a,b,u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+
+        return n;
     }
 
     vec3 gradientNoise(in vec2 x)
@@ -72,7 +95,7 @@ function init(){
         vec2 f = fract(x);
         
         vec2 u = f * f * (3.0 - 2.0 * f);
-        vec2 du = 6.0 * f * (1.0 - f);
+        vec2 du = 2.0 * f * (1.0 - f);
 
         vec2 ga = hash(i + vec2(0.0,0.0));
         vec2 gb = hash(i + vec2(1.0,0.0));
@@ -87,7 +110,6 @@ function init(){
         return vec3( va + u.x*(vb-va) + u.y*(vc-va) + u.x*u.y*(va-vb-vc+vd),
                  ga + u.x*(gb-ga) + u.y*(gc-ga) + u.x*u.y*(ga-gb-gc+gd) + 
                  du * (u.yx*(va-vb-vc+vd) + vec2(vb,vc) - va));
-
     }
 
     //input  and Hurst exponent
@@ -108,7 +130,31 @@ function init(){
         float value = 0.0;
         for(int i = 0; i < numOctaves; i++)
         {
-            value += gradientNoise(freq * x).x * amplitude;
+            value += gradientNoise(freq * x).z * amplitude;
+            // value += noise(freq * x) * amplitude;
+
+            // each "octave" is twice the frequency
+            freq *= 2.0;
+            amplitude *= gain;
+        }
+        return value;
+    }
+
+    
+    float fbmOcts(in vec2 x, in float H)
+    {
+        // exponential decay of Hurst 
+        float gain = exp2(-H);
+        // wavelength 
+        float freq = 1.0;
+        float amplitude = 1.0;
+        // output 
+        float value = 0.0;
+        for(int i = 0; i < int(numOctaves * 2); i++)
+        {
+            // value += gradientNoise(freq * x).z * amplitude;
+            value += noise(freq * x) * amplitude;
+
             // each "octave" is twice the frequency
             freq *= 2.0;
             amplitude *= gain;
@@ -127,50 +173,62 @@ function init(){
     float dualWarp(in vec2 p, in float H, out vec2 q, out vec2 r)
     {
             
-        //modulating input for fbm, vec2 additions are offsets
         q.x = 
-            fbm(p 
-                + vec2(iRands.w + iTime * 0.05 * iRands.x,
-                0.0 + iTime *0.05 * iRands.y),H);
+            fbm(p + vec2(fbm(vec2(iTime * iRands.w * 0.01,iTime * iRands.z * 0.01),H),fbm(vec2(iTime * iRands.y * 0.01,iTime * iRands.x * 0.01),H)), H);
+            // fbm(p + vec2(0.0,0.0), H);
+
         q.y = 
-            fbm(p 
-                + vec2(iRands.y + iTime *0.05 * iRands.z, 
-                0.0 + iTime * 0.05 * iRands.w),H);
+            fbm(p + vec2(fbm(vec2(iTime * iRands.x * 0.01,iTime * iRands.y * 0.01),H),fbm(vec2(iTime * iRands.z * 0.01,iTime * iRands.w * 0.01),H)), H);
+            // fbm(p + vec2(0.0,0.0), H);
 
         r.x = 
-            fbm(p + ((4.0 * fbm(vec2(iRands.x * iTime * 0.01, iRands.y * iTime * 0.01),H)) * q) 
-                + vec2(
-                1.0,
-                1.0), H);
-        r.y = 
-            fbm(p + ((4.0 * fbm(vec2(iRands.w * iTime * 0.01, iRands.z * iTime * 0.01),H)) * q) 
-                + vec2(
-                1.0,
-                1.0), H);
+            fbm(p + vec2(0.0 + iTime,0.0 + iTime) + q, H);
+            // fbm(p + vec2(0.0,0.0) + q, H); 
 
-        return fbm(p + 4.0 * r, H);
+        r.y = 
+            fbm(p + vec2(0.0 + iTime,0.0 + iTime) + q, H);
+            // fbm(p + vec2(0.0,0.0) + q, H);
+        
+        float sig = 
+            // fbm(p + abs(fbm(vec2(0,iTime * 0.1),H)) * r * 5.0, H);
+            fbm((p + sin(iTime)) + r * 2.0, H);
+            // fbm(p + r,H);
+        
+        return sig;
     }
 
     float dualWarp2(in vec2 p, in float H, out vec2 q, out vec2 r)
     {
         q.x = 
-            fbm(p + vec2(0.0,0.0), H);
+            fbm(p + vec2(fbm(vec2(iTime * iRands.w * 0.01,iTime * iRands.z * 0.01),H),fbm(vec2(iTime * iRands.y * 0.01,iTime * iRands.x * 0.01),H)), H);
+            // fbm(p + vec2(0.0,0.0), H);
+
         q.y = 
-            fbm(p + vec2(0.0,0.0),H);
-        
+            fbm(p + vec2(fbm(vec2(iTime * iRands.x * 0.01,iTime * iRands.y * 0.01),H),fbm(vec2(iTime * iRands.z * 0.01,iTime * iRands.w * 0.01),H)), H);
+            // fbm(p + vec2(0.0,0.0), H);
+
         r.x = 
-            fbm(p + 4.0 * q,H);
+            fbm(p + vec2(0.0 + iTime,0.0 + iTime) + q, H);
+            // fbm(p + vec2(0.0,0.0) + q, H); 
 
         r.y = 
-            fbm(p + 4.0 * q,H);
+            fbm(p + vec2(0.0 + iTime,0.0 + iTime) + q, H);
+            // fbm(p + vec2(0.0,0.0) + q, H);
         
-        return fbm(p + 4.0 * r, H);
+        float sig = 
+            // fbm(p + abs(fbm(vec2(0,iTime * 0.1),H)) * r * 5.0, H);
+            fbm((p + sin(iTime)) + r * 2.0, H);
+            // fbm(p + r,H);
+        
+        return sig;
     }
 
     //what we see
 
     void frag(out vec4 fragColor, in vec2 fragCoord){
         vec2 uv = fragCoord / iResolution.xy;
+
+        uv += 0.0;
 
         float speed = 0.1;
         vec2 dir = vec2(-1.0,1.0);
@@ -189,19 +247,25 @@ function init(){
         //output values from nested fbm
         vec2 q; vec2 r; vec2 p; vec2 g;
 
-        float basicDualWarp = dualWarp(uv, 0.05, q, r);
-        float scaledDualWarp = dualWarp(uv * scale, 0.9, q,r);
+        float basicDualWarp = dualWarp(uv, 0.25, q, r);
+
+        float scaledDualWarp = dualWarp(uv * scale, 0.2, q,r);
 
         float basicWarp = warp(uv,0.05);
 
+        float gain = 1.0;
 
-        float gain = 2.0;
+        float warp = mix(dualWarp(uv,0.5,q,r), basicDualWarp, (sin(dualWarp(r, 0.5, q,r) + 1.0) * 0.5));
+
         float min = 0.0;
-        vec3 col = vec3(1.0,0.2,0.3);
-        vec3 col2 = vec3(fbm(r,1.0),fbm(q,1.0),fbm(r * q, 1.0));
-        col = mix(col, vec3(0.05, 0.1, 0.3), 0.5 * smoothstep(0.5,1.5,abs(r.y) + abs(r.x)));
-        col = mix(col, vec3(0.2, 0.125, 0.03), 0.5 * smoothstep(1.1,1.2,abs(p.y) + abs(p.x)));
-        col *= basicDualWarp * gain;
+        vec3 col = vec3(1.0,1.0,1.0);
+        // vec3 col = vec3(fbm(r * 0.5 + uv * 0.5,abs(sin(-iTime * iRands.x))),fbm(q * 0.5 - uv * 0.5,abs(sin(iTime * iRands.y))),(uv.x + uv.y)) * basicDualWarp;
+        // col = vec3(fbm(r * 0.5 + uv * 0.5,abs(sin(-iTime * iRands.x))),fbm(q * 0.5 - uv * 0.5,abs(sin(iTime * iRands.y))),(uv.x + uv.y));
+        // col = mix(col, vec3(1.0,1.0,1.0), fbmOcts(uv, abs(fbmOcts(r,abs(sin(iTime))))));
+
+        // col = mix(col, vec3(0.05, 0.1, 0.3), 0.5 * smoothstep(0.5,1.5,abs(r.y) + abs(r.x)));
+        // col = mix(col, vec3(0.2, 0.125, 0.03), 0.5 * smoothstep(1.1,1.2,abs(p.y) + abs(p.x)));
+        col *= warp * gain;
         col += min;
 
         fragColor = vec4(col,1.0);
@@ -222,9 +286,15 @@ function init(){
 
     const position = gl.getAttribLocation(program, 'aPosition');
     const positionBuffer = gl.createBuffer();
+    const texture = loadTexture(gl, "images/Input6.png");
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-        -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1
+        -1, -1, 1, 
+        -1, -1, 1, 
+        -1, 1, 1, 
+        -1, 1, 1
     ]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(position);
     gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0,0);
@@ -235,16 +305,77 @@ function init(){
 
     gl.uniform4f(randomFloats, GetRandomFloat(-1.0,1.0), GetRandomFloat(-1.0,1.0), GetRandomFloat(-1.0,1.0), GetRandomFloat(-1.0,1.0));
 
+
     function render(t){
-        t *= 0.001;
+        t *= 0.0001;
         resize();
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.uniform2f(resolution, canvas.width, canvas.height);
         gl.uniform1f(time, t);
+        // console.log(t);
         gl.drawArrays(gl.TRIANGLES, 0,6);
         requestAnimationFrame(render);
     }
     requestAnimationFrame(render);
+}
+
+function loadTexture(gl, url){
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D,texture);
+
+    const level =0;
+    const internalFormat = gl.RGBA;
+    const width = 1;
+    const height = 1;
+    const border = 0;
+    const srcFormat = gl.RGBA;
+    const srcType = gl.UNSIGNED_BYTE;
+    const pixel = new Uint8Array([0,0,255,255]);
+
+    gl.texImage2D(
+        gl.TEXTURE_2D,
+        level,
+        internalFormat,
+        width,
+        height,
+        border,
+        srcFormat,
+        srcType,
+        pixel,
+    );
+
+    const image = new Image();
+    image.onload = () => {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(
+            gl.TEXTURE_2D,
+            level,
+            internalFormat,
+            srcFormat,
+            srcType,
+            image,
+        );
+
+
+        if(isPowerOf2(image.width) && isPowerOf2(image.height))
+        {
+            gl.generateMipmap(gl.TEXTURE_2D);     
+        } 
+        else
+        {
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_FILTER, gl.LINEAR);
+        }
+    };
+
+    image.src = url;
+
+    return texture;
+}
+
+function isPowerOf2(value){
+    return(value & (value - 1)) === 0;
 }
 
 function CreateShader(gl, vertSource, fragSource)
