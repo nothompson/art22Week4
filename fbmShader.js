@@ -36,11 +36,17 @@ function init(){
     const Vert = 
     `
         precision highp float;
+
         attribute vec2 aPosition;
+        attribute vec2 aUV;
+
         varying vec2 vPosition;
+        varying vec2 vUV;
+
         void main(){
             gl_Position = vec4(aPosition, 0.0, 1.0);
             vPosition = gl_Position.xy;
+            vUV = aUV;
         }
     `;
 
@@ -50,9 +56,12 @@ function init(){
     uniform vec2 iResolution;
     uniform float iTime;
     uniform vec4 iRands;
+    uniform sampler2D iChrome;
+    uniform sampler2D iTexture;
 
-    #define numOctaves 5
-    
+    varying vec2 vUV;
+
+    #define numOctaves 3   
     int randomOctave(in float x)
     {
         return int(floor(x));
@@ -65,8 +74,8 @@ function init(){
     
     vec2 hash(in vec2 x)
     {
-        // vec2 k = vec2(abs(iRands.x) + 1.0,abs(iRands.y) + 1.0);
-        vec2 k = vec2(1.98592,1.123985);
+        vec2 k = vec2(abs(iRands.x) + 1.0,abs(iRands.y) + 1.0);
+        // vec2 k = vec2(1.98592,1.123985);
 
         x = x*k + k.yx;
         return -1.0 + 2.0 * fract(8.0 * k * (x.x*x.y *(x.x + x.y)));
@@ -156,7 +165,7 @@ function init(){
             value += noise(freq * x) * amplitude;
 
             // each "octave" is twice the frequency
-            freq *= 2.0;
+            freq *= 1.0;
             amplitude *= gain;
         }
         return value;
@@ -191,7 +200,7 @@ function init(){
         
         float sig = 
             // fbm(p + abs(fbm(vec2(0,iTime * 0.1),H)) * r * 5.0, H);
-            fbm((p + sin(iTime)) + r * 2.0, H);
+            fbm((p + sin(iTime)) + r * 4.0, H);
             // fbm(p + r,H);
         
         return sig;
@@ -226,9 +235,9 @@ function init(){
     //what we see
 
     void frag(out vec4 fragColor, in vec2 fragCoord){
-        vec2 uv = fragCoord / iResolution.xy;
+        vec2 uv = vUV;
 
-        uv += 0.0;
+        // uv += fragCoord / iResolution;
 
         float speed = 0.1;
         vec2 dir = vec2(-1.0,1.0);
@@ -247,18 +256,23 @@ function init(){
         //output values from nested fbm
         vec2 q; vec2 r; vec2 p; vec2 g;
 
-        float basicDualWarp = dualWarp(uv, 0.25, q, r);
+        float basicDualWarp = dualWarp(uv, 0.9, q, r);
 
         float scaledDualWarp = dualWarp(uv * scale, 0.2, q,r);
 
-        float basicWarp = warp(uv,0.05);
+        float basicWarp = warp(uv,0.9);
 
+        float texGain = 1.0;
         float gain = 1.0;
 
-        float warp = mix(dualWarp(uv,0.5,q,r), basicDualWarp, (sin(dualWarp(r, 0.5, q,r) + 1.0) * 0.5));
+        float warp = mix(dualWarp(uv,0.1,q,r), basicDualWarp, (sin(dualWarp(r, 0.9, q,r) + 1.0) * 0.5));
+
+        vec2 vectorWarp = vec2(warp, warp);
+
+        vec2 warpedUV = uv + basicDualWarp * 0.25 + q * warp * r * texGain;
 
         float min = 0.0;
-        vec3 col = vec3(1.0,1.0,1.0);
+        vec3 col = vec3(0.0,0.7,1.0);
         // vec3 col = vec3(fbm(r * 0.5 + uv * 0.5,abs(sin(-iTime * iRands.x))),fbm(q * 0.5 - uv * 0.5,abs(sin(iTime * iRands.y))),(uv.x + uv.y)) * basicDualWarp;
         // col = vec3(fbm(r * 0.5 + uv * 0.5,abs(sin(-iTime * iRands.x))),fbm(q * 0.5 - uv * 0.5,abs(sin(iTime * iRands.y))),(uv.x + uv.y));
         // col = mix(col, vec3(1.0,1.0,1.0), fbmOcts(uv, abs(fbmOcts(r,abs(sin(iTime))))));
@@ -268,7 +282,16 @@ function init(){
         col *= warp * gain;
         col += min;
 
-        fragColor = vec4(col,1.0);
+        vec4 chrome = texture2D(iChrome,warpedUV * 0.25);
+
+        vec4 tex = texture2D(iTexture, warpedUV);
+
+        vec4 fragCol = vec4(col,1.0);
+
+        vec4 sig = mix(chrome,tex, fbm(uv,0.5));
+        sig = mix(sig, fragCol * 0.25, fbm(uv,0.5) * (q.x + q.y));
+        sig = mix(sig, tex, r.x + r.y);
+        fragColor = sig;
     }
 
     void main(){
@@ -285,26 +308,51 @@ function init(){
     gl.useProgram(program);
 
     const position = gl.getAttribLocation(program, 'aPosition');
+    const uv = gl.getAttribLocation(program, 'aUV');
+    
     const positionBuffer = gl.createBuffer();
-    const texture = loadTexture(gl, "images/Input6.png");
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-        -1, -1, 1, 
-        -1, -1, 1, 
-        -1, 1, 1, 
-        -1, 1, 1
+    -1, -1,   0, 0,
+    1, -1,   1, 0,
+    -1,  1,   0, 1,
+
+    -1,  1,   0, 1,
+    1, -1,   1, 0,
+    1,  1,   1, 1,
     ]), gl.STATIC_DRAW);
+
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    
     gl.enableVertexAttribArray(position);
-    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0,0);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 4 * 4, 0);
+    
+    gl.enableVertexAttribArray(uv);
+    gl.vertexAttribPointer(
+        uv,2, gl.FLOAT, false, 4 * 4, 2 * 4
+    );
+    const chrome = loadTexture(gl, "images/chrome.png");
+    const texture = loadTexture(gl, "images/Input3.png");
+
+
+    const chromeLocation = gl.getUniformLocation(program, 'iChrome');
+    const texLocation = gl.getUniformLocation(program, 'iTexture');
+    
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, chrome);
+    gl.uniform1i(chromeLocation, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.uniform1i(texLocation, 1);
 
     const resolution = gl.getUniformLocation(program, 'iResolution');
     const time = gl.getUniformLocation(program, 'iTime');
     const randomFloats = gl.getUniformLocation(program, 'iRands');
-
+    
     gl.uniform4f(randomFloats, GetRandomFloat(-1.0,1.0), GetRandomFloat(-1.0,1.0), GetRandomFloat(-1.0,1.0), GetRandomFloat(-1.0,1.0));
-
+    
 
     function render(t){
         t *= 0.0001;
@@ -313,7 +361,7 @@ function init(){
         gl.uniform2f(resolution, canvas.width, canvas.height);
         gl.uniform1f(time, t);
         // console.log(t);
-        gl.drawArrays(gl.TRIANGLES, 0,6);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
         requestAnimationFrame(render);
     }
     requestAnimationFrame(render);
@@ -323,7 +371,7 @@ function loadTexture(gl, url){
     const texture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D,texture);
 
-    const level =0;
+    const level = 0;
     const internalFormat = gl.RGBA;
     const width = 1;
     const height = 1;
